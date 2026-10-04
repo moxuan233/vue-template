@@ -1,23 +1,33 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import HomeView from '../views/HomeView.vue'
+import DivineView from '../views/DivineView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: HomeView
+      name: 'divine',
+      component: DivineView,
     },
     {
-      path: '/about',
-      name: 'about',
-      // route level code-splitting
-      // this generates a separate chunk (About.[hash].js) for this route
-      // which is lazy-loaded when the route is visited.
-      component: () => import('../views/AboutView.vue')
-    }
-  ]
+      path: '/gua',
+      name: 'reference',
+      // 路由级代码分割：卦典数据较大，按需加载
+      component: () => import('../views/ReferenceView.vue'),
+    },
+    {
+      path: '/method',
+      name: 'method',
+      component: () => import('../views/MethodView.vue'),
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/',
+    },
+  ],
+  scrollBehavior() {
+    return { top: 0 }
+  },
 })
 
 export default router
