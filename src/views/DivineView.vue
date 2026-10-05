@@ -1,11 +1,30 @@
 <script setup lang="ts">
 /**
- * 起卦页：输入生辰 → 排八字 → 起卦 → 解卦。
+ * 起卦页：
+ *  一、八字起卦（输入生辰 → 排四柱 → 起卦 → 解卦）
+ *  二、每日之卦（无须生辰，由当日日柱与当下时柱推卦，每天/每时辰自动更新）
+ *  三、解卦结果下方附「大白话版」小结
  */
-import { computed, reactive, ref } from 'vue'
-import { computeBazi, SHI_CHEN, zhiToHourRange, type BaziResult } from '@/logic/bazi'
-import { castByDayan, castFromBazi, castFromValues, palaceOf, type Casting } from '@/logic/qigua'
-import { buildReading, type Reading } from '@/logic/reader'
+import { computed, onMounted, reactive, ref } from 'vue'
+import {
+  blockByHour,
+  computeBazi,
+  HOUR_BLOCKS,
+  hourOfBlock,
+  SHI_CHEN,
+  zhiToHourRange,
+  type BaziResult,
+} from '@/logic/bazi'
+import {
+  castByDay,
+  castByDayan,
+  castFromBazi,
+  castFromValues,
+  palaceOf,
+  type Casting,
+  type DayCast,
+} from '@/logic/qigua'
+import { buildPlainTalk, buildReading, type PlainTalk, type Reading } from '@/logic/reader'
 import { WUXING_COLOR, ZHI_LIU_CHONG, ZHI_LIU_HE } from '@/data/ganzhi'
 import GuaDiagram from '@/components/GuaDiagram.vue'
 
@@ -14,37 +33,68 @@ const form = reactive({
   year: 1990,
   month: 1,
   day: 1,
-  hour: 12,
-  minute: 0,
+  /** 时辰区间序号 0..11（子..亥） */
+  blockIndex: blockByHour(12).index,
   question: '',
 })
 
 const bazi = ref<BaziResult | null>(null)
 const casting = ref<Casting | null>(null)
 const reading = ref<Reading | null>(null)
+const plain = ref<PlainTalk | null>(null)
 const error = ref('')
 const showAllLayers = ref(false)
 const activeLayer = ref<number | null>(null)
 
-const hourOptions = Array.from({ length: 24 }, (_, i) => i)
+/** 每日之卦 */
+const dayCast = ref<DayCast | null>(null)
+const dayReading = ref<Reading | null>(null)
+const dayPlain = ref<PlainTalk | null>(null)
+const dayError = ref('')
+
+function loadDayCast() {
+  dayError.value = ''
+  try {
+    const dc = castByDay(new Date())
+    dayCast.value = dc
+    dayReading.value = buildReading(
+      dc.casting,
+      null,
+      `${dc.dateText}　${dc.note}`,
+    )
+    dayPlain.value = buildPlainTalk(dayReading.value, dc.casting)
+  } catch (e) {
+    dayError.value = e instanceof Error ? e.message : String(e)
+    dayCast.value = null
+    dayReading.value = null
+    dayPlain.value = null
+  }
+}
+
+onMounted(loadDayCast)
 
 function run() {
   error.value = ''
   try {
     const b = computeBazi({
-      year: form.year, month: form.month, day: form.day,
-      hour: form.hour, minute: form.minute,
+      year: form.year,
+      month: form.month,
+      day: form.day,
+      hour: hourOfBlock(form.blockIndex),
+      minute: 0,
     })
     bazi.value = b
     const c = castFromBazi(b)
     casting.value = c
     reading.value = buildReading(c, b)
+    plain.value = buildPlainTalk(reading.value, c)
     activeLayer.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
     bazi.value = null
     casting.value = null
     reading.value = null
+    plain.value = null
   }
 }
 
@@ -53,14 +103,18 @@ function runDayan() {
   error.value = ''
   try {
     const b = computeBazi({
-      year: form.year, month: form.month, day: form.day,
-      hour: form.hour, minute: form.minute,
+      year: form.year,
+      month: form.month,
+      day: form.day,
+      hour: hourOfBlock(form.blockIndex),
+      minute: 0,
     })
     bazi.value = b
     const { values } = castByDayan()
     const c = castFromValues(values)
     casting.value = c
     reading.value = buildReading(c, b)
+    plain.value = buildPlainTalk(reading.value, c)
     activeLayer.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -71,6 +125,7 @@ function reset() {
   bazi.value = null
   casting.value = null
   reading.value = null
+  plain.value = null
   error.value = ''
 }
 
@@ -100,6 +155,15 @@ const zhiRelations = computed(() => {
   }
   return out
 })
+
+/** 每日之卦的世应 */
+const dayBianInfo = computed(() => {
+  const bian = dayCast.value?.casting.bian
+  if (!bian) return { shi: -1, ying: -1 }
+  const p = palaceOf(bian.meta)
+  return { shi: p.shiIndex, ying: p.yingIndex }
+})
+const dayYaos = computed(() => dayReading.value?.yaos ?? [])
 </script>
 
 <template>
@@ -127,16 +191,12 @@ const zhiRelations = computed(() => {
           <input v-model.number="form.day" type="number" min="1" max="31" />
         </label>
         <label class="field">
-          <span>时</span>
-          <select v-model.number="form.hour">
-            <option v-for="h in hourOptions" :key="h" :value="h">
-              {{ String(h).padStart(2, '0') }} 时
+          <span>出生时辰（两小时区间）</span>
+          <select v-model.number="form.blockIndex">
+            <option v-for="b in HOUR_BLOCKS" :key="b.index" :value="b.index">
+              {{ b.label }}
             </option>
           </select>
-        </label>
-        <label class="field">
-          <span>分</span>
-          <input v-model.number="form.minute" type="number" min="0" max="59" />
         </label>
         <label class="field wide">
           <span>所问何事（可不填，仅作记录）</span>
@@ -150,9 +210,63 @@ const zhiRelations = computed(() => {
         <button v-if="bazi" class="btn ghost" @click="reset">清空</button>
       </div>
       <p class="hint">
-        公历生日。年柱以立春换年、月柱以十二节换月，由历法库自动处理，故年初月末出生不会排错柱。
+        公历生日。时辰按传统十二时辰分档（每档两小时，子时跨夜 23:00–01:00）——
+        八字按时辰取时柱，同一时辰内排盘结果相同，故选区间比填具体钟点更贴合实际。
+        年柱以立春换年、月柱以十二节换月，由历法库自动处理。
       </p>
       <p v-if="error" class="err">{{ error }}</p>
+    </section>
+
+    <!-- 每日之卦：无须生辰，随日期自动更新 -->
+    <section class="panel day-panel">
+      <div class="panel-head row">
+        <h2>每日之卦</h2>
+        <button class="btn ghost small" @click="loadDayCast">刷新</button>
+      </div>
+      <p v-if="dayError" class="err">{{ dayError }}</p>
+      <template v-else-if="dayCast && dayReading && dayPlain">
+        <div class="day-meta">
+          <span class="day-date">{{ dayCast.dateText }}</span>
+          <span>{{ dayCast.lunarText }}</span>
+          <span class="chip">日柱 {{ dayCast.dayGanZhi }}</span>
+          <span class="chip">时柱 {{ dayCast.hourGanZhi }}</span>
+          <span class="chip">{{ dayCast.hourRange }}</span>
+        </div>
+
+        <div class="day-body">
+          <GuaDiagram
+            :ben="dayCast.casting.ben"
+            :bian="dayCast.casting.bian"
+            :yaos="dayYaos"
+            :bian-shi="dayBianInfo.shi"
+            :bian-ying="dayBianInfo.ying"
+          />
+          <div class="day-plain">
+            <p class="onel"><b>一句话</b>{{ dayPlain.oneLine }}</p>
+            <p><b>关键提醒</b>{{ dayPlain.keyPoint }}</p>
+            <p><b>走向</b>{{ dayPlain.trend }}</p>
+          </div>
+        </div>
+
+        <details class="day-more">
+          <summary>看这一卦的完整十一步解卦</summary>
+          <ol class="layers compact">
+            <li v-for="(s, i) in dayReading.sections" :key="i" class="layer">
+              <div class="layer-body static">
+                <p class="layer-sub">{{ s.title }}</p>
+                <p v-if="s.basis" class="basis">依据：{{ s.basis }}</p>
+                <blockquote v-if="s.quote" class="quote">{{ s.quote }}</blockquote>
+                <p v-for="(t, j) in s.paragraphs" :key="j">{{ t }}</p>
+              </div>
+            </li>
+          </ol>
+        </details>
+
+        <p class="hint">
+          推法：上卦 ← 当日日干（纳甲）；下卦 ← 当下时支序 mod 8；动爻 ← (时干序 + 时支序) mod 6。
+          与八字起卦同一结构，只是把"年柱"换成"日柱"。同一时辰内结果一致，换时辰或换日子自动变化。
+        </p>
+      </template>
     </section>
 
     <template v-if="bazi && casting && reading">
@@ -329,6 +443,53 @@ const zhiRelations = computed(() => {
           <p class="hint">{{ movingYao.posNote }}</p>
         </div>
       </section>
+
+      <!-- 大白话版 -->
+      <section v-if="plain" class="panel plain-panel">
+        <header class="panel-head">
+          <h2>七、大白话版</h2>
+          <p class="plain-lead">把上面的术语翻成日常说法：顺不顺、该进还是该守、下一步会怎样。</p>
+        </header>
+
+        <p class="oneliner">{{ plain.oneLine }}</p>
+
+        <div class="plain-block">
+          <h3>眼下的处境</h3>
+          <p v-for="(t, i) in plain.situation" :key="i">{{ t }}</p>
+        </div>
+
+        <div class="plain-block key">
+          <h3>关键提醒</h3>
+          <p>{{ plain.keyPoint }}</p>
+        </div>
+
+        <div class="plain-cols">
+          <div class="plain-block dos">
+            <h3>该做的</h3>
+            <ul>
+              <li v-for="(t, i) in plain.dos" :key="i">{{ t }}</li>
+            </ul>
+          </div>
+          <div class="plain-block donts">
+            <h3>不该做的</h3>
+            <ul>
+              <li v-for="(t, i) in plain.donts" :key="i">{{ t }}</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="plain-block">
+          <h3>走向</h3>
+          <p>{{ plain.trend }}</p>
+        </div>
+
+        <div class="plain-block">
+          <h3>时间与耐心</h3>
+          <p>{{ plain.timing }}</p>
+        </div>
+
+        <p class="plain-closing">{{ plain.closing }}</p>
+      </section>
     </template>
   </div>
 </template>
@@ -429,6 +590,188 @@ h2 {
 }
 .btn.ghost {
   background: transparent;
+}
+.btn.small {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+/* ── 每日之卦 ── */
+.day-panel {
+  border-color: var(--gu-primary-line);
+  background: linear-gradient(180deg, var(--gu-primary-soft), var(--gu-surface) 42%);
+}
+.day-panel h2 {
+  margin-bottom: 0;
+}
+.day-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  font-size: 0.84rem;
+  color: var(--gu-text-soft);
+  margin: 0.7rem 0 1rem;
+}
+.day-date {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--gu-primary);
+}
+.day-body {
+  display: flex;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.day-body > :first-child {
+  /* 卦象区需要放下"本卦 + 变卦"两栏 */
+  flex: 3 1 560px;
+}
+.day-plain {
+  flex: 2 1 300px;
+  min-width: 260px;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--gu-line);
+  border-radius: 10px;
+  background: var(--gu-surface-2);
+  font-size: 0.9rem;
+  line-height: 1.85;
+}
+.day-plain p {
+  margin: 0 0 0.55rem;
+}
+.day-plain p:last-child {
+  margin-bottom: 0;
+}
+.day-plain b {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--gu-primary);
+  letter-spacing: 0.06em;
+  margin-bottom: 0.1rem;
+}
+.day-plain .onel {
+  padding-bottom: 0.55rem;
+  border-bottom: 1px dashed var(--gu-line);
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+.day-more {
+  margin-top: 1rem;
+  border-top: 1px solid var(--gu-line);
+  padding-top: 0.7rem;
+}
+.day-more summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+  color: var(--gu-primary);
+  list-style: none;
+}
+.day-more summary::-webkit-details-marker {
+  display: none;
+}
+.day-more summary::before {
+  content: '▸ ';
+}
+.day-more[open] summary::before {
+  content: '▾ ';
+}
+.layers.compact {
+  margin-top: 0.7rem;
+}
+.layers.compact .layer {
+  border: 0;
+  background: transparent;
+}
+.layer-body.static {
+  padding: 0.4rem 0 0.7rem;
+}
+.layer-sub {
+  margin: 0 0 0.2rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--gu-primary);
+}
+
+/* ── 大白话版 ── */
+.plain-panel {
+  border-color: color-mix(in srgb, var(--gu-accent) 30%, var(--gu-line));
+}
+.plain-panel h2 {
+  color: var(--gu-accent);
+  margin-bottom: 0.3rem;
+}
+.plain-lead {
+  margin: 0 0 1rem;
+  font-size: 0.84rem;
+  color: var(--gu-text-mute);
+}
+.oneliner {
+  margin: 0 0 1.1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--gu-accent);
+  background: color-mix(in srgb, var(--gu-accent) 8%, transparent);
+  border-radius: 0 10px 10px 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+  line-height: 1.75;
+}
+.plain-block {
+  margin-bottom: 1rem;
+}
+.plain-block h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--gu-text-mute);
+}
+.plain-block p {
+  margin: 0.25rem 0;
+  font-size: 0.94rem;
+  line-height: 1.9;
+  color: var(--gu-text-soft);
+}
+.plain-block.key p {
+  padding: 0.6rem 0.85rem;
+  border-radius: 9px;
+  background: var(--gu-surface-2);
+  color: var(--gu-text);
+}
+.plain-block ul {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.94rem;
+  line-height: 1.9;
+  color: var(--gu-text-soft);
+}
+.plain-block li {
+  margin-bottom: 0.25rem;
+}
+.plain-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.plain-block.dos h3 {
+  color: var(--gu-good);
+}
+.plain-block.donts h3 {
+  color: var(--gu-warn);
+}
+.plain-closing {
+  margin: 0.4rem 0 0;
+  padding-top: 0.8rem;
+  border-top: 1px dashed var(--gu-line);
+  font-size: 0.84rem;
+  line-height: 1.9;
+  color: var(--gu-text-mute);
+}
+@media (max-width: 640px) {
+  .plain-cols {
+    grid-template-columns: 1fr;
+  }
 }
 .hint {
   margin: 0.7rem 0 0;

@@ -3,12 +3,19 @@
  * 运行：npx vitest run
  */
 import { describe, expect, it } from 'vitest'
-import { computeBazi } from '@/logic/bazi'
-import { castFromBazi, castFromValues, palaceOf, yaoTitle, castByDayan } from '@/logic/qigua'
-import { buildReading } from '@/logic/reader'
+import { blockByHour, computeBazi, HOUR_BLOCKS, hourOfBlock } from '@/logic/bazi'
+import {
+  castByDay,
+  castByDayan,
+  castFromBazi,
+  castFromValues,
+  palaceOf,
+  yaoTitle,
+} from '@/logic/qigua'
+import { buildPlainTalk, buildReading } from '@/logic/reader'
 import { YIJING, YIJING_BY_ID, YIJING_BY_NAME } from '@/data/yijing.generated'
 import { HEXAGRAM_META, shapeByNumber, metaByNumber, metaByLines } from '@/data/hexagrams'
-import { BAGUA } from '@/data/bagua'
+import { BAGUA, baguaByLines } from '@/data/bagua'
 
 const TRIG: Record<string, string> = {
   乾: '111', 兑: '110', 离: '101', 震: '100',
@@ -259,6 +266,139 @@ describe('解卦引擎', () => {
   })
 })
 
+describe('时辰区间', () => {
+  it('十二个区间、每档两小时、子时跨夜', () => {
+    expect(HOUR_BLOCKS).toHaveLength(12)
+    const zi = HOUR_BLOCKS[0]
+    expect(zi.zhi).toBe('子')
+    expect(zi.startHour).toBe(23)
+    expect(zi.endHour).toBe(1)
+    expect(zi.range).toBe('23:00–01:00')
+    for (const b of HOUR_BLOCKS) {
+      expect((b.endHour - b.startHour + 24) % 24).toBe(2)
+    }
+    // 覆盖全天且不重叠
+    const covered = new Set<number>()
+    for (const b of HOUR_BLOCKS) {
+      for (let k = 0; k < 2; k++) covered.add((b.startHour + k) % 24)
+    }
+    expect(covered.size).toBe(24)
+  })
+
+  it('钟点归属正确（含子时跨夜边界）', () => {
+    expect(blockByHour(23).zhi).toBe('子')
+    expect(blockByHour(0).zhi).toBe('子')
+    expect(blockByHour(1).zhi).toBe('丑')
+    expect(blockByHour(9).zhi).toBe('巳')
+    expect(blockByHour(10).zhi).toBe('巳') // 10 时属 09:00–11:00 这一档
+    expect(blockByHour(11).zhi).toBe('午')
+    expect(blockByHour(22).zhi).toBe('亥')
+    expect(hourOfBlock(blockByHour(10).index)).toBe(9)
+    expect(hourOfBlock(0)).toBe(23)
+  })
+})
+
+describe('每日之卦', () => {
+  it('同一时辰内结果一致（可复算）', () => {
+    const a = castByDay(new Date(2026, 9, 5, 10, 5, 0))
+    const b = castByDay(new Date(2026, 9, 5, 10, 55, 0))
+    expect(a.dayGanZhi).toBe(b.dayGanZhi)
+    expect(a.hourGanZhi).toBe(b.hourGanZhi)
+    expect(a.casting.ben.meta.name).toBe(b.casting.ben.meta.name)
+    expect(a.casting.movingIndex).toBe(b.casting.movingIndex)
+  })
+
+  it('换时辰会换卦或换动爻', () => {
+    const morning = castByDay(new Date(2026, 9, 5, 9, 0, 0))
+    const evening = castByDay(new Date(2026, 9, 5, 21, 0, 0))
+    const changed =
+      morning.casting.ben.meta.name !== evening.casting.ben.meta.name ||
+      morning.casting.movingIndex !== evening.casting.movingIndex
+    expect(changed).toBe(true)
+  })
+
+  it('推法与声明的公式一致：上卦←日干、下卦←时支序 mod 8、动爻←(时干+时支) mod 6', () => {
+    const dc = castByDay(new Date(2026, 9, 5, 10, 0, 0))
+    const b = computeBazi({ year: 2026, month: 10, day: 5, hour: 9, minute: 0 })
+    const dayGan = b.pillars[2].gan
+    const hourZhi = b.pillars[3].zhi
+    const hourGan = b.pillars[3].gan
+    expect(dc.dayGanZhi.charAt(0)).toBe(dayGan)
+    expect(dc.hourZhi).toBe(hourZhi)
+    // 上卦 = 日干纳甲
+    const GAN_TO_BAGUA: Record<string, string> = {
+      甲: '乾', 乙: '坤', 丙: '艮', 丁: '兑', 戊: '坎', 己: '离', 庚: '震', 辛: '巽', 壬: '乾', 癸: '坤',
+    }
+    expect(dc.casting.ben.upper.name).toBe(GAN_TO_BAGUA[dayGan])
+    const zhiIdx = '子丑寅卯辰巳午未申酉戌亥'.indexOf(hourZhi)
+    // 时支序（0 起）mod 8 取三画值：子=0→坤、丑=1→震、寅=2→坎、卯=3→兑、
+    // 辰=4→艮、巳=5→巽、午=6→离、未=7→乾，其后循环
+    expect(dc.casting.ben.lower.name).toBe(
+      ['坤', '震', '坎', '兑', '艮', '巽', '离', '乾'][zhiIdx % 8],
+    )
+    const ganIdx = '甲乙丙丁戊己庚辛壬癸'.indexOf(hourGan)
+    expect(dc.casting.movingIndex).toBe((ganIdx + zhiIdx) % 6)
+  })
+
+  it('可为每日之卦生成解卦与大白话（无需生辰）', () => {
+    const dc = castByDay(new Date(2026, 9, 5, 10, 0, 0))
+    const r = buildReading(dc.casting, null, `${dc.dateText}　${dc.note}`)
+    expect(r.sections).toHaveLength(11)
+    expect(r.yaos).toHaveLength(6)
+    expect(r.sections[0].paragraphs[0]).toContain('每日之卦')
+    for (const y of r.yaos) {
+      expect(y.liuShen.length).toBeGreaterThan(0)
+    }
+    const p = buildPlainTalk(r, dc.casting)
+    for (const v of [p.oneLine, p.keyPoint, p.trend, p.timing, p.closing]) {
+      expect(v.length).toBeGreaterThan(0)
+    }
+    expect(p.situation.length).toBeGreaterThan(0)
+    expect(p.dos.length).toBeGreaterThan(0)
+    expect(p.donts.length).toBeGreaterThan(0)
+  })
+
+  it('全天 24 个钟点都能出结果（不抛错）', () => {
+    for (let h = 0; h < 24; h++) {
+      const dc = castByDay(new Date(2026, 9, 5, h, 0, 0))
+      expect(dc.casting.ben.meta.name.length).toBeGreaterThan(0)
+      expect(dc.casting.movingIndex).toBeGreaterThanOrEqual(0)
+    }
+  })
+})
+
+describe('大白话版', () => {
+  it('三种典型局面都能生成完整小结', () => {
+    const b = computeBazi({ year: 1990, month: 1, day: 1, hour: 9, minute: 0 })
+    const c1 = castFromBazi(b)
+    expect(buildPlainTalk(buildReading(c1, b), c1).oneLine).toContain('之《')
+
+    const c2 = castFromValues([7, 8, 7, 8, 7, 8])
+    const p2 = buildPlainTalk(buildReading(c2, b), c2)
+    expect(p2.situation.some((s) => s.includes('没动'))).toBe(true)
+
+    const c3 = castFromValues([9, 9, 9, 9, 9, 9])
+    const p3 = buildPlainTalk(buildReading(c3, b), c3)
+    expect(p3.dos.length).toBeGreaterThan(0)
+    expect(p3.trend.length).toBeGreaterThan(0)
+  })
+
+  it('64 卦 × 动爻均能生成大白话', () => {
+    const b = computeBazi({ year: 1985, month: 5, day: 20, hour: 14, minute: 0 })
+    for (let n = 1; n <= 64; n++) {
+      const gx = YIJING_BY_ID.get(n)!.guaXiang
+      const values = gx.split('').map((c) => (c === '1' ? 7 : 8))
+      values[0] = gx[0] === '1' ? 9 : 6
+      const c = castFromValues(values)
+      const p = buildPlainTalk(buildReading(c, b), c)
+      expect(p.oneLine.length, `第${n}卦`).toBeGreaterThan(10)
+      expect(p.keyPoint.length, `第${n}卦关键提醒`).toBeGreaterThan(10)
+      expect(p.dos.length, `第${n}卦该做`).toBeGreaterThan(0)
+      expect(p.donts.length, `第${n}卦不该做`).toBeGreaterThan(0)
+    }
+  })
+})
+
 describe('yaoTitle 工具', () => {
   it('与语料爻题一致', () => {
     for (const h of YIJING) {
@@ -271,14 +411,34 @@ describe('yaoTitle 工具', () => {
 })
 
 describe('bagua 数据自洽', () => {
-  it('八卦二进制与卦符对应', () => {
-    expect(BAGUA.乾.bits).toBe(0b111)
-    expect(BAGUA.坤.bits).toBe(0b000)
-    expect(BAGUA.震.bits).toBe(0b100)
-    expect(BAGUA.巽.bits).toBe(0b011)
-    expect(BAGUA.坎.bits).toBe(0b010)
-    expect(BAGUA.离.bits).toBe(0b101)
-    expect(BAGUA.艮.bits).toBe(0b001)
-    expect(BAGUA.兑.bits).toBe(0b110)
+  it('三画字符串左起即初爻，与语料 guaXiang 前/后三位一致', () => {
+    expect(BAGUA.乾.lines).toBe('111')
+    expect(BAGUA.兑.lines).toBe('110')
+    expect(BAGUA.离.lines).toBe('101')
+    expect(BAGUA.震.lines).toBe('100')
+    expect(BAGUA.巽.lines).toBe('011')
+    expect(BAGUA.坎.lines).toBe('010')
+    expect(BAGUA.艮.lines).toBe('001')
+    expect(BAGUA.坤.lines).toBe('000')
+    // bits 与 lines 严格对应：bit2 = 初爻（初爻在最左）
+    for (const b of Object.values(BAGUA)) {
+      const want =
+        (Number(b.lines[0]) << 2) | (Number(b.lines[1]) << 1) | Number(b.lines[2])
+      expect(b.bits, `${b.name} bits`).toBe(want)
+    }
+    // 八纯卦：六位爻画应为该卦三画自我拼接
+    for (const name of ['乾', '兑', '离', '震', '巽', '坎', '艮', '坤']) {
+      const h = YIJING_BY_NAME.get(name)!
+      expect(h.guaXiang, `${name} 六画`).toBe(BAGUA[name as keyof typeof BAGUA].lines.repeat(2))
+    }
+  })
+
+  it('baguaByLines 可查表，且覆盖八个三画组合', () => {
+    const seen = new Set<string>()
+    for (const b of Object.values(BAGUA)) {
+      expect(baguaByLines(b.lines).name).toBe(b.name)
+      seen.add(b.lines)
+    }
+    expect(seen.size).toBe(8)
   })
 })

@@ -235,3 +235,54 @@ export const SHI_CHEN: Record<string, string> = {
   子: '夜半', 丑: '鸡鸣', 寅: '平旦', 卯: '日出', 辰: '食时', 巳: '隅中',
   午: '日中', 未: '日昳', 申: '晡时', 酉: '日入', 戌: '黄昏', 亥: '人定',
 }
+
+// ── 时辰区间 ───────────────────────────────────────────────────────────
+// 十二时辰每辰两小时，子时跨夜（23:00–01:00）起算，故时支下标即区间序号，
+// 起始钟点为 (下标 × 2 + 23) mod 24。
+// 八字按时辰取时柱：同一时辰内排盘结果完全相同，因此让用户选"两小时区间"
+// 比填具体钟点更贴合实际精度，也免去"记不清几点几分"的困扰。
+
+export interface HourBlock {
+  /** 0..11，对应子..亥 */
+  index: number
+  /** 时支，如「巳」 */
+  zhi: string
+  /** 时支在时辰中的别称，如「隅中」 */
+  name: string
+  /** 起始小时（0–23） */
+  startHour: number
+  /** 结束小时（0–23） */
+  endHour: number
+  /** 区间文本，如「09:00–11:00」 */
+  range: string
+  /** 下拉选项标签，如「09:00–11:00 巳时（隅中）」 */
+  label: string
+}
+
+/** 十二个时辰区间，自子时起 */
+export const HOUR_BLOCKS: HourBlock[] = DI_ZHI.map((zhi, i) => {
+  const startHour = (i * 2 + 23) % 24
+  const endHour = (startHour + 2) % 24
+  const range = `${pad(startHour)}:00–${pad(endHour)}:00`
+  return {
+    index: i,
+    zhi,
+    name: SHI_CHEN[zhi],
+    startHour,
+    endHour,
+    range,
+    label: `${range} ${zhi}时（${SHI_CHEN[zhi]}）`,
+  }
+})
+
+/** 由钟点（0–23）取所属时辰区间 */
+export function blockByHour(hour: number): HourBlock {
+  const h = ((Math.floor(hour) % 24) + 24) % 24
+  // 子时自 23 点起，故先 +1 再折半
+  return HOUR_BLOCKS[Math.floor(((h + 1) % 24) / 2)]
+}
+
+/** 由区间序号取起点钟点（用于表单回填） */
+export function hourOfBlock(index: number): number {
+  return HOUR_BLOCKS[((index % 12) + 12) % 12].startHour
+}

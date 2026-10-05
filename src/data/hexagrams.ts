@@ -5,7 +5,7 @@
  * `bits` 是其数值形式（bit5 = 初爻），与 guaXiang 一一对应。
  */
 
-import { baguaByBits, type Bagua } from './bagua'
+import { baguaByLines, type Bagua } from './bagua'
 import {
   YIJING,
   YIJING_BY_ID,
@@ -81,11 +81,8 @@ export function metaByLines(lines: number[]): HexagramMeta {
 }
 
 function baguaOf(three: string): Bagua {
-  // three 左起即初爻（三画），而 bagua.ts 的三画 bits 以 bit0 为初爻。
-  // 两者方向相反：three[0]（初爻）对应 bit2，故需倒序写入。
-  let bits = 0
-  for (let i = 0; i < 3; i++) if (three[i] === '1') bits |= 1 << (2 - i)
-  return baguaByBits(bits)
+  // three 左起即初爻，与 bagua.ts 的 lines 同序，直接查表
+  return baguaByLines(three)
 }
 
 export function shapeOf(meta: HexagramMeta): HexagramShape {

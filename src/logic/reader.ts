@@ -83,7 +83,7 @@ export interface ReadingSection {
 
 export interface Reading {
   text: YijingHexagram
-  /** 十一层 */
+  /** 十一步 */
   sections: ReadingSection[]
   /** 六爻明细 */
   yaos: YaoReading[]
@@ -107,13 +107,15 @@ function allZheng(lines: number[]): boolean {
   return lines.every((_, i) => zhengOf(lines, i))
 }
 
-export function buildReading(c: Casting, bazi: BaziResult): Reading {
+export function buildReading(c: Casting, bazi: BaziResult | null, castLabel = ''): Reading {
   const text = YIJING_BY_ID.get(c.ben.meta.number)
   if (!text) throw new Error(`语料缺该卦：${c.ben.meta.name}`)
 
   const palace = palaceOf(c.ben.meta)
   const najia = najiaOf(c.ben)
-  const shen0 = liuShenStart(bazi.pillars[2].gan)
+  // 六神自日干起：有八字则用其日干，否则用当日日干（由起卦时的依据给出）
+  const shenGan = bazi?.pillars[2].gan ?? c.origin.upperFrom.gan
+  const shen0 = liuShenStart(shenGan)
 
   const yaos: YaoReading[] = c.ben.lines.map((v, i) => {
     const zheng = zhengOf(c.ben.lines, i)
@@ -192,7 +194,9 @@ export function buildReading(c: Casting, bazi: BaziResult): Reading {
       title: '第一步 · 定问',
       basis: '《蒙》"初筮告，再三渎，渎则不告"',
       paragraphs: [
-        `所问之事以一次诚心起卦为准，反复追问即是亵渎。本次以 ${bazi.solarText} 出生的四柱为据，日主 ${bazi.dayMaster}${bazi.dayMasterWuXing}。`,
+        castLabel
+          ? `本次为每日之卦：${castLabel}。无须生辰，由当日日柱与当下时柱推卦，同一时辰内结果一致。`
+          : `所问之事以一次诚心起卦为准，反复追问即是亵渎。本次以 ${bazi?.solarText ?? ''} 出生的四柱为据，日主 ${bazi?.dayMaster ?? ''}${bazi?.dayMasterWuXing ?? ''}。`,
         '世爻代表占问者本人，应爻象征所问之事、人、时、地、物——下文"世应"一步会指出它们的具体位置。',
       ],
     },
@@ -348,4 +352,175 @@ export function buildReading(c: Casting, bazi: BaziResult): Reading {
 export function divine(bazi: BaziResult) {
   const casting = castFromBazi(bazi)
   return { casting, reading: buildReading(casting, bazi) }
+}
+
+// ── 大白话版 ──────────────────────────────────────────────────────────
+// 把文言与术语翻成日常说法：不谈"当位""比应"，只说"顺不顺、该进还是该守"。
+// 判词与吉凶轻重依《系辞上》"吉凶者，言乎其失得也…无咎者，善补过也"的通例折算。
+
+export interface PlainTalk {
+  /** 一句话总结 */
+  oneLine: string
+  /** 处境：眼下是什么局面 */
+  situation: string[]
+  /** 关键提醒：这一卦最要紧的一句话 */
+  keyPoint: string
+  /** 该做的 / 不该做的 */
+  dos: string[]
+  donts: string[]
+  /** 走向：事情会往哪边发展 */
+  trend: string
+  /** 时间与耐心 */
+  timing: string
+  /** 结语 */
+  closing: string
+}
+
+/** 卦德的口语化说法 */
+const VIRTUE_PLAIN: Record<string, string> = {
+  健: '主动、要强、停不下来',
+  顺: '跟着走、别抢先',
+  动: '会被惊动、得先稳住',
+  入: '慢慢渗透、别硬来',
+  陷: '正处在坑里、先别挣扎',
+  丽: '得靠着点什么才能发光',
+  止: '该停就停、别硬撑',
+  说: '和和气气、把话说开',
+}
+
+/** 动爻位置的口语化提醒 */
+const POS_PLAIN: Record<number, string> = {
+  0: '事情刚开头，别急着下结论，也别急着出手',
+  1: '你处在配合的位置，把事情做扎实，自然会有人看见',
+  2: '这是最容易出岔子的位置，别硬顶，宁可退一步',
+  3: '离核心很近，反而要格外谨慎，少说多做',
+  4: '你处在主导位置，可以拿主意，但别把话说满',
+  5: '事情到了收尾，别恋战，见好就收',
+}
+
+/** 判词轻重：返回 -2..+2，负数偏凶 */
+function judgmentWeight(text: string): number {
+  if (!text) return 0
+  let w = 0
+  if (/凶|吝|厉|灾|眚/.test(text)) w -= 1
+  if (/大凶|终凶|征凶|凶险/.test(text)) w -= 1
+  if (/吉|利|无悔|悔亡|无咎/.test(text)) w += 1
+  if (/元吉|大吉|无不利/.test(text)) w += 1
+  return Math.max(-2, Math.min(2, w))
+}
+
+export function buildPlainTalk(r: Reading, c: Casting): PlainTalk {
+  const name = c.ben.meta.name
+  const full = c.ben.fullName
+  const bian = c.bian?.meta.name
+  const moving = r.yaos.find((y) => y.moving) ?? null
+  const weight = judgmentWeight(r.movingText)
+  const zhengCount = r.yaos.filter((y) => y.zheng).length
+
+  // ── 处境 ──
+  const situation: string[] = []
+  situation.push(
+    `你摇到的是《${name}》卦（${full}）。上卦是${c.ben.upper.name}（${c.ben.upper.image}）` +
+      `——${VIRTUE_PLAIN[c.ben.upper.virtue] ?? c.ben.upper.virtueDetail}；` +
+      `下卦是${c.ben.lower.name}（${c.ben.lower.image}）` +
+      `——${VIRTUE_PLAIN[c.ben.lower.virtue] ?? c.ben.lower.virtueDetail}。`,
+  )
+  situation.push(
+    `合起来看，这件事的底色是"内${c.ben.lower.virtue}外${c.ben.upper.virtue}"：` +
+      `先${VIRTUE_PLAIN[c.ben.lower.virtue]?.split('、')[0] ?? c.ben.lower.virtue}，` +
+      `再${VIRTUE_PLAIN[c.ben.upper.virtue]?.split('、')[0] ?? c.ben.upper.virtue}。`,
+  )
+  if (moving) {
+    situation.push(
+      `眼下动的是${moving.title}这一爻，也就是"${POS_PLAIN[moving.index]}"那个位置。` +
+        `这一爻说的是：${moving.text}`,
+    )
+  } else {
+    situation.push('六个爻都没动，说明局面暂时是稳的，短期内不会有大的翻转。')
+  }
+
+  // ── 一句话总结 ──
+  const tone =
+    weight >= 2 ? '整体是顺的，可以放手去做' :
+    weight === 1 ? '整体偏顺，按部就班就行' :
+    weight === 0 ? '谈不上吉也谈不上凶，关键看你怎么做' :
+    weight === -1 ? '不太顺，宜守不宜攻' :
+    '眼下偏难，最好先按兵不动'
+  const oneLine = `${full}${bian ? `，之《${bian}》` : ''}——${tone}。`
+
+  // ── 关键提醒 ──
+  let keyPoint: string
+  if (moving?.zheng && moving.youYing) {
+    keyPoint = '你的位置是对的，方向也是对的，外界也有回应——这种情况最忌讳自己乱改主意。'
+  } else if (moving?.zheng && !moving.youYing) {
+    keyPoint = '你的做法本身没问题，但暂时没人接你的话、也没人配合。别怀疑自己，多等一等，或者主动去找能对接的人。'
+  } else if (moving && !moving.zheng && moving.youYing) {
+    keyPoint = '方向是对的，但你的位置或做法有点别扭。先把姿态调正（该谁做主就让谁做主，该退半步就退半步），事情马上就顺。'
+  } else if (moving) {
+    keyPoint = '位置和回应都不太理想。这不是让你放弃，而是提醒你：现在硬推代价大，先把自己调整好，等条件变了再动。'
+  } else {
+    keyPoint = '局面平稳，最要紧的是照着卦辞和大象说的道理去做，别自己加戏。'
+  }
+  if (zhengCount <= 2 && moving) {
+    keyPoint += '（这一卦六个位置里合位的很少，本来就是个需要费点劲的局面，别把不顺都归到自己头上。）'
+  }
+
+  // ── 该做 / 不该做 ──
+  const dos: string[] = []
+  const donts: string[] = []
+
+  if (c.ben.lower.name === c.ben.upper.name) {
+    dos.push(`这一卦上下都是${c.ben.lower.name}，力量很纯粹，适合专注做一件事，不要分心。`)
+  }
+  if (moving) {
+    if (moving.zheng) dos.push('守住现在的做法，别因为一时没动静就换路子。')
+    else dos.push('先调整自己的位置和做法，把"名分"理顺了再推进。')
+    if (moving.youYing) dos.push('有回应就顺着回应走，该合作就合作，别单干。')
+    else donts.push('别指望别人主动来接应，指望不上；要么自己备好后手，要么换个能对接的时机。')
+  } else {
+    dos.push('按卦辞说的做，稳住节奏，不必急着改变什么。')
+  }
+  dos.push(`记住这一卦的核心是"${c.ben.upper.virtue}"与"${c.ben.lower.virtue}"：${c.ben.upper.virtueDetail}；${c.ben.lower.virtueDetail}。`)
+
+  if (weight <= -1) {
+    donts.push('不宜大动作：不跳槽、不投资、不摊牌、不签长期承诺，先拖一拖看变化。')
+  }
+  if (weight >= 1) {
+    donts.push('顺的时候最容易大意，别贪多、别加杠杆、别把话说满。')
+  }
+  if (weight === 0) {
+    donts.push('别赌运气，这件事的结果主要取决于你后面怎么做，而不是天注定。')
+  }
+  if (c.bian) {
+    donts.push(`别忽略《${c.bian.meta.name}》这个方向——事情下一步会往那边走，提前有个准备。`)
+  }
+
+  // ── 走向 ──
+  let trend: string
+  if (c.bian) {
+    const bianText = YIJING_BY_ID.get(c.bian.meta.number)
+    const allZheng = c.bian.lines.every((_, i) => (i % 2 === 0 ? c.bian!.lines[i] === 1 : c.bian!.lines[i] === 0))
+    trend = allZheng
+      ? `动爻一变，局面就转成了《${c.bian.meta.name}》——而且这一卦六个位置全部摆正了，意思是：只要按上面说的调整，事情能真正走通。`
+      : `动爻一变，局面会转成《${c.bian.meta.name}》${bianText ? `（"${bianText.guaCi}"）` : ''}。这是事情的下一阶段，不是终局，但方向在那里。`
+  } else {
+    trend = '没有动爻，也就没有"下一阶段"的提示——说明这件事的走向主要看你自己怎么维持，卦本身不会替你推动。'
+  }
+
+  // ── 时间与耐心 ──
+  const timing =
+    moving && moving.index <= 1
+      ? '动爻在下面，说明事情还在早期。别急，现在做的是打基础，成果要往后看。'
+      : moving && moving.index >= 4
+        ? '动爻在上面，说明事情已经走到后段。该收尾就收尾，别恋战，见好就收。'
+        : moving
+          ? '动爻在中间，正是要劲的时候。这段时间的取舍最关键，别拖延也别莽撞。'
+          : '局面平缓，时间上不必赶，按自己的节奏来。'
+
+  const closing =
+    '最后一句实在话：卦是给你一个看问题的角度，不是判决书。' +
+    '荀子说"善为《易》者不占"，武王伐纣时占得"大凶"，姜太公也只当它是"枯骨朽木"。' +
+    '该做的事，卦再凶也得做；不该做的事，卦再吉也别碰。'
+
+  return { oneLine, situation, keyPoint, dos, donts, trend, timing, closing }
 }

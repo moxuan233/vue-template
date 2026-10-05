@@ -14,9 +14,17 @@ export type BaguaName = '乾' | '兑' | '离' | '震' | '巽' | '坎' | '艮' | 
 export interface Bagua {
   /** 卦名 */
   name: BaguaName
-  /** 卦符（自下而上三画，1=阳爻，0=阴爻） */
+  /** 卦符 */
   symbol: string
-  /** 三画二进制，自下而上，如 乾=111、震=100（初爻在下） */
+  /**
+   * 三画字符串，**左起即初爻**（1 阳 / 0 阴），与语料 guaXiang 的六位写法同序。
+   * 六爻的数据（hexagrams.ts）由上下两段三画直接拼接，故此处以此为准。
+   */
+  lines: string
+  /**
+   * 三画的数值形式，**bit2 = 初爻**（与 lines 严格对应：初爻在最左）。
+   * 即 bits = lines[0]×4 + lines[1]×2 + lines[2]。
+   */
   bits: number
   /** 自然之象（《说卦》） */
   image: string
@@ -38,54 +46,65 @@ export interface Bagua {
   gan: string
 }
 
-/** 八经卦，索引即其二进制值（0..7） */
+/** 八经卦。lines 左起即初爻；bits 为 (lines[0]<<2)|(lines[1]<<1)|lines[2] */
 export const BAGUA: Record<BaguaName, Bagua> = {
   坤: {
-    name: '坤', symbol: '☷', bits: 0b000, image: '地', virtue: '顺',
+    name: '坤', symbol: '☷', lines: '000', bits: 0b000, image: '地', virtue: '顺',
     virtueDetail: '柔顺、承载、包容，顺承天道而时行',
     direction: '西南', season: '夏秋之间', family: '母', yinyang: '阴卦', wuxing: '土', gan: '乙',
   },
   震: {
-    name: '震', symbol: '☳', bits: 0b100, image: '雷', virtue: '动',
+    name: '震', symbol: '☳', lines: '100', bits: 0b100, image: '雷', virtue: '动',
     virtueDetail: '震动、奋起、惊惧修省，动而免乎险',
     direction: '东', season: '正春', family: '长男', yinyang: '阳卦', wuxing: '木', gan: '庚',
   },
   坎: {
-    name: '坎', symbol: '☵', bits: 0b010, image: '水', virtue: '陷',
+    name: '坎', symbol: '☵', lines: '010', bits: 0b010, image: '水', virtue: '陷',
     virtueDetail: '险陷、劳苦、流动，处险而能守中',
     direction: '北', season: '正冬', family: '中男', yinyang: '阳卦', wuxing: '水', gan: '戊',
   },
   兑: {
-    name: '兑', symbol: '☱', bits: 0b110, image: '泽', virtue: '说',
+    name: '兑', symbol: '☱', lines: '110', bits: 0b110, image: '泽', virtue: '说',
     virtueDetail: '喜悦、和顺、言说，说以先民而民忘其劳',
     direction: '西', season: '正秋', family: '少女', yinyang: '阴卦', wuxing: '金', gan: '丁',
   },
   艮: {
-    name: '艮', symbol: '☶', bits: 0b001, image: '山', virtue: '止',
+    name: '艮', symbol: '☶', lines: '001', bits: 0b001, image: '山', virtue: '止',
     virtueDetail: '静止、抑止、界限，时止则止、时行则行',
     direction: '东北', season: '冬春之间', family: '少男', yinyang: '阳卦', wuxing: '土', gan: '丙',
   },
   巽: {
-    name: '巽', symbol: '☴', bits: 0b011, image: '风', virtue: '入',
+    name: '巽', symbol: '☴', lines: '011', bits: 0b011, image: '风', virtue: '入',
     virtueDetail: '进入、顺行、号令，风行无所不入',
     direction: '东南', season: '春末夏初', family: '长女', yinyang: '阴卦', wuxing: '木', gan: '辛',
   },
   离: {
-    name: '离', symbol: '☲', bits: 0b101, image: '火', virtue: '丽',
+    name: '离', symbol: '☲', lines: '101', bits: 0b101, image: '火', virtue: '丽',
     virtueDetail: '附丽、光明、文明，附于正而化成天下',
     direction: '南', season: '正夏', family: '中女', yinyang: '阴卦', wuxing: '火', gan: '己',
   },
   乾: {
-    name: '乾', symbol: '☰', bits: 0b111, image: '天', virtue: '健',
+    name: '乾', symbol: '☰', lines: '111', bits: 0b111, image: '天', virtue: '健',
     virtueDetail: '刚健、创造、自强不息，天行健而不息',
     direction: '西北', season: '秋冬之间', family: '父', yinyang: '阳卦', wuxing: '金', gan: '甲',
   },
 }
 
-/** 由三画二进制（初爻在最低位）取卦 */
+/** 由三画字符串（左起即初爻）取卦 */
+export function baguaByLines(lines: string): Bagua {
+  const found = Object.values(BAGUA).find((b) => b.lines === lines)
+  if (!found) throw new Error(`未知的三画组合：${lines}`)
+  return found
+}
+
+/**
+ * 由三画数值取卦。注意 bits 的约定：**bit2 = 初爻**（与 lines 同序），
+ * 而非"把 lines 当作二进制数"。调用方若手上的数值是"bit0 = 初爻"，
+ * 请先反转三位，或改用 baguaByLines。
+ */
 export function baguaByBits(bits: number): Bagua {
   const found = Object.values(BAGUA).find((b) => b.bits === bits)
-  if (!found) throw new Error(`未知的三画组合：${bits}`)
+  if (!found) throw new Error(`未知的三画数值：${bits}`)
   return found
 }
 

@@ -19,6 +19,7 @@
  * 若需改回源书原法，请用 castByDayan() 的大衍筮法（此处一并实现，供对照）。
  */
 
+import { Solar } from 'lunar-typescript'
 import { GAN_TO_BAGUA, NA_JIA_ZHI, BAGUA, type BaguaName } from '@/data/bagua'
 import {
   HEXAGRAM_META,
@@ -59,13 +60,19 @@ export interface Casting {
   yaoWuXing: WuXing[]
 }
 
-const POS = ['初', '二', '三', '四', '五', '上']
+/**
+ * 时支序（0 起）对 8 取模后对应的下卦，如 巳（序 5）→ 巽。
+ * 用显式表而非 Object.values 的遍历顺序，保证与声明一致、可读可查。
+ */
+const ZHI_MOD8_BAGUA: BaguaName[] = ['坤', '震', '坎', '兑', '艮', '巽', '离', '乾']
 
 /** 八卦三画字符串（左起即初爻），用于拼装 guaXiang */
 const TRIGRAM_LINES: Record<BaguaName, string> = {
   乾: '111', 兑: '110', 离: '101', 震: '100',
   巽: '011', 坎: '010', 艮: '001', 坤: '000',
 }
+
+const POS = ['初', '二', '三', '四', '五', '上']
 
 /** 由上下卦取卦：guaXiang = 下卦三画 + 上卦三画 */
 export function metaNameOf(lower: BaguaName, upper: BaguaName): string {
@@ -267,8 +274,7 @@ export function castByDayan(random: () => number = Math.random): {
 }
 
 /** 由六爻值（6/7/8/9）取卦与动爻 */
-export function castFromValues(values: number[]): Casting {
-  const lines = values.map((v) => (v === 7 || v === 9 ? 1 : 0))
+export function castFromValues(values: number[]): Casting {  const lines = values.map((v) => (v === 7 || v === 9 ? 1 : 0))
   const ben = shapeOf(metaByLines(lines))
   const moving = values.map((v, i) => (v === 6 || v === 9 ? i : -1)).filter((i) => i >= 0)
   const movedLines = [...lines]
@@ -291,6 +297,123 @@ export function castFromValues(values: number[]): Casting {
     najia: najiaOf(ben),
     yaoWuXing: najiaOf(ben).map(zhiWuXing),
   }
+}
+
+/** 日卦：由某一天之日柱与当下时柱推得的卦（"今日之卦"） */
+export interface DayCast {
+  casting: Casting
+  /** 该日日期文本，如「2026年10月5日」 */
+  dateText: string
+  /** 该日农历 */
+  lunarText: string
+  /** 该日干支（日柱） */
+  dayGanZhi: string
+  /** 当下时柱干支 */
+  hourGanZhi: string
+  /** 时辰区间文本，如「09:00–11:00」 */
+  hourRange: string
+  /** 时支 */
+  hourZhi: string
+  /** 推法说明 */
+  note: string
+}
+
+/**
+ * 每日之卦：无需生辰，由**当日日柱**与**当下时柱**推卦。
+ *
+ * 推法（与八字起卦同一结构，只是把"年柱"换成"日柱"）：
+ *   上卦 ← 当日日干（纳甲天干配卦）
+ *   下卦 ← 当下时支（3 画 = (时支序 mod 8)，序数自 0 起：子=坤…亥=乾）
+ *   动爻 ← (时干序 + 时支序) mod 6 + 1
+ *
+ * 之所以用"时支序 mod 8"给下卦：时支共 12 个而八卦只有 8 个，取模后
+ * 子→坤、丑→震、寅→坎、卯→兑、辰→艮、巳→巽、午→离、未→乾（申酉戌亥再循环），
+ * 规则单一、可复算。代价是十二时辰只走遍八卦，申时会与子时同卦——
+ * 但同日内日柱相同、动爻仍随时干时支变化，故结果不会与子时重合。
+ *
+ * 同一时辰区间内结果完全一致；换时辰或换日子则自动变化。
+ */
+export function castByDay(when: Date = new Date()): DayCast {
+  const solar = Solar.fromYmdHms(
+    when.getFullYear(), when.getMonth() + 1, when.getDate(), when.getHours(), when.getMinutes(), 0,
+  )
+  const lunar = solar.getLunar()
+  const ec = lunar.getEightChar()
+
+  const dayGan = ec.getDayGan()
+  const dayZhi = ec.getDayZhi()
+  const hourGan = ec.getTimeGan()
+  const hourZhi = ec.getTimeZhi()
+
+  const upper = GAN_TO_BAGUA[dayGan]
+  if (!upper) throw new Error(`纳甲表中无此天干：${dayGan}`)
+
+  const zhiIdx = DI_ZHI.indexOf(hourZhi as (typeof DI_ZHI)[number])
+  // 时支序（0 起）对 8 取模 -> 下卦
+  const lower = ZHI_MOD8_BAGUA[zhiIdx % 8]
+
+  const ganIdx = TIAN_GAN.indexOf(hourGan as (typeof TIAN_GAN)[number])
+  const movingIndex = (ganIdx + zhiIdx) % 6
+
+  const ben = shapeOf(metaByName(metaNameOf(lower, upper)))
+  const movedLines = [...ben.lines]
+  movedLines[movingIndex] = movedLines[movingIndex] === 1 ? 0 : 1
+  const bian = shapeOf(metaByLines(movedLines))
+
+  const block = hourBlockOf(hourZhi)
+
+  return {
+    casting: {
+      ben,
+      bian,
+      movingIndex,
+      staticCast: false,
+      allMoving: false,
+      origin: {
+        upperFrom: {
+          label: '当日日干',
+          gan: dayGan,
+          bagua: upper,
+          rule: `纳甲：${dayGan} 纳 ${upper}（${BAGUA[upper].image}）`,
+        },
+        lowerFrom: {
+          label: '当下时支',
+          gan: '',
+          bagua: lower,
+          rule: `时支 ${hourZhi}（序 ${zhiIdx + 1}）mod 8 = ${zhiIdx % 8} → ${lower}`,
+        },
+        movingFrom: {
+          label: '时干 + 时支',
+          expression: `(${hourGan}=${ganIdx + 1} + ${hourZhi}=${zhiIdx + 1}) mod 6 = ${movingIndex + 1}`,
+          index: movingIndex,
+        },
+      },
+      najia: najiaOf(ben),
+      yaoWuXing: najiaOf(ben).map(zhiWuXing),
+    },
+    dateText: `${when.getFullYear()}年${when.getMonth() + 1}月${when.getDate()}日`,
+    lunarText: lunar.toString(),
+    dayGanZhi: dayGan + dayZhi,
+    hourGanZhi: hourGan + hourZhi,
+    hourRange: block.range,
+    hourZhi,
+    note: `当日日柱 ${dayGan}${dayZhi}、当下时柱 ${hourGan}${hourZhi}（${block.range}）`,
+  }
+}
+
+/** 由三画数值取卦名（bagua.ts 的 bits：bit0 = 初爻） */
+function baguaNameByBits(bits: number): BaguaName {
+  const found = (Object.keys(BAGUA) as BaguaName[]).find((k) => BAGUA[k].bits === bits)
+  if (!found) throw new Error(`未知三画：${bits}`)
+  return found
+}
+
+function hourBlockOf(zhi: string) {
+  const idx = DI_ZHI.indexOf(zhi as (typeof DI_ZHI)[number])
+  const startHour = (idx * 2 + 23) % 24
+  const endHour = (startHour + 2) % 24
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return { range: `${pad(startHour)}:00–${pad(endHour)}:00` }
 }
 
 export { WUXING_COLOR }

@@ -34,18 +34,27 @@ await step('首页加载', async () => {
 })
 
 await step('填写生辰并起卦', async () => {
-  // 表单为：年/月/日（number）· 时（select）· 分（number）· 所问何事（text）
+  // 表单为：年/月/日（number）· 出生时辰（select，十二时辰区间）· 所问何事（text）
   const nums = page.locator('.form input[type="number"]')
   await nums.nth(0).fill('1990') // 年
   await nums.nth(1).fill('1') // 月
   await nums.nth(2).fill('1') // 日
-  await nums.nth(3).fill('0') // 分
-  await page.locator('.form select').selectOption('12') // 时 = 12
+  await page.locator('.form select').selectOption('5') // 巳时 09:00–11:00
   await page.getByRole('button', { name: '起卦解卦' }).click()
   await page.waitForSelector('text=四柱排盘', { timeout: 20000 })
 })
 
-await step('四柱显示为 己巳 丙子 丙寅 甲午', async () => {
+await step('时辰下拉为十二个两小时区间', async () => {
+  const opts = await page.locator('.form select option').allInnerTexts()
+  if (opts.length !== 12) throw new Error(`区间数 ${opts.length}，应为 12`)
+  const joined = opts.join('|')
+  for (const want of ['23:00–01:00 子时', '09:00–11:00 巳时', '21:00–23:00 亥时']) {
+    if (!joined.includes(want)) throw new Error(`缺少区间「${want}」`)
+  }
+  if (opts.some((o) => /^\d{2} 时$/.test(o.trim()))) throw new Error('仍存在单小时粒度的选项')
+})
+
+await step('四柱显示为 己巳 丙子 丙寅 癸巳（巳时）', async () => {
   // 干支分别渲染在 .p-gan / .p-zhi（天干后附十神小字），故按柱逐一比对
   const cols = await page.locator('.pillar').evaluateAll((els) =>
     els.map((e) => ({
@@ -59,7 +68,7 @@ await step('四柱显示为 己巳 丙子 丙寅 甲午', async () => {
     ['年柱', '己', '巳'],
     ['月柱', '丙', '子'],
     ['日柱', '丙', '寅'],
-    ['时柱', '甲', '午'],
+    ['时柱', '癸', '巳'],
   ]
   cols.forEach((c, i) => {
     if (c.label !== want[i][0]) throw new Error(`第${i + 1}柱标签 ${c.label}`)
@@ -69,6 +78,40 @@ await step('四柱显示为 己巳 丙子 丙寅 甲午', async () => {
   })
   const text = await page.locator('.panel', { hasText: '四柱排盘' }).first().innerText()
   if (!text.includes('日主')) throw new Error('缺少日主标注')
+  // 时柱旁应显示时辰区间
+  const timeCol = await page.locator('.pillar').nth(3).innerText()
+  if (!timeCol.includes('09:00–11:00')) throw new Error(`时柱未显示时辰区间：${timeCol}`)
+})
+
+await step('大白话版渲染完整', async () => {
+  const panel = page.locator('.plain-panel').first()
+  const text = await panel.innerText()
+  for (const kw of ['关键提醒', '眼下的处境', '该做的', '不该做的', '走向', '时间与耐心']) {
+    if (!text.includes(kw)) throw new Error(`大白话缺少「${kw}」`)
+  }
+  // 一句话总结渲染在 .oneliner（无小标题），单独校验
+  const oneliner = page.locator('.plain-panel .oneliner')
+  if ((await oneliner.count()) !== 1) throw new Error('缺少一句话总结')
+  const one = (await oneliner.innerText()).trim()
+  if (one.length < 8) throw new Error(`一句话总结过短：${one}`)
+  if ((await panel.locator('.plain-block.dos li').count()) < 1) throw new Error('「该做的」没有条目')
+  if ((await panel.locator('.plain-block.donts li').count()) < 1) throw new Error('「不该做的」没有条目')
+})
+
+await step('每日之卦自动出结果且含当天日期', async () => {
+  const panel = page.locator('.day-panel').first()
+  const text = await panel.innerText()
+  const today = new Date()
+  const wantDate = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`
+  if (!text.includes(wantDate)) throw new Error(`未显示当天日期 ${wantDate}`)
+  for (const kw of ['日柱', '时柱', '一句话', '关键提醒', '走向']) {
+    if (!text.includes(kw)) throw new Error(`每日之卦缺少「${kw}」`)
+  }
+  // 展开完整十一步
+  await panel.locator('details summary').click()
+  await page.waitForTimeout(250)
+  const layers = await panel.locator('.layers .layer').count()
+  if (layers !== 11) throw new Error(`每日之卦层次数 ${layers}`)
 })
 
 await step('卦象区出现本卦与动爻标记', async () => {
